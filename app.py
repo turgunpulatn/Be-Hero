@@ -97,8 +97,8 @@ def collect_risks(result):
         all_risks.append({
             "kind": "huquqiy",
             "title": r.get("message_uz", ""),
-            "quote": "",
-            "verified": None,
+            "quote": " ".join(str(r.get("sitata", "")).split()),
+            "verified": True if r.get("sitata") else None,
             "source": "",
             "label": "Maslahat",
             "consequence": r.get("advice_uz", ""),

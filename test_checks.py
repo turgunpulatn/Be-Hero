@@ -30,6 +30,8 @@ check("words_to_int uz 2500", words_to_int("ikki ming besh yuz") == 2500)
 check("words_to_int 450 mln", words_to_int("toʻrt yuz ellik million soʻm") == 450_000_000)
 check("words_to_int mln", words_to_int("besh mln soʻm") == 5_000_000)
 check("words_to_int with plain '", words_to_int("to'qson ming") == 90_000)
+check("ordinal 61st", words_to_int("oltmish birinchi") == 61)
+check("ordinal ikkinchi/elliginchi", words_to_int("ikkinchi") == 2 and words_to_int("elliginchi") == 50)
 check("unknown word -> None", words_to_int("bundan keyin Sotuvchi") is None)
 
 
@@ -46,6 +48,7 @@ check("equal with o'n ming typed with '", not mism("Narx 10 000 (o'n ming) AQSH 
 check("2500 ok", not mism("Summa 2 500 (ikki ming besh yuz) soʻm"))
 check("unrelated parens ignored", not mism("Sotuvchi 3 (bundan keyin Sotuvchi) deb ataladi, 5 (1-ilova)"))
 check("small number", not mism("Uy 3 (uch) xonali, 2 (ikki) qavatli"))
+check("ordinal not flagged", not mism("Shartnomaning 61 (oltmish birinchi) bandi"))
 
 print("3) AI output hygiene")
 good = {"sitata": "Xaridor har kuni 1% jarima toʻlaydi", "muammo": "Katta jarima", "moliyaviy_tasir": "Oyiga 30% gacha zarar"}

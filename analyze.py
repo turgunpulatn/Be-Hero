@@ -101,12 +101,14 @@ RISK_RULES = [
 def apply_rule_based_risks(contract_text: str) -> list:
     found = []
     for rule in RISK_RULES:
-        if re.search(rule["pattern"], contract_text, re.IGNORECASE | re.DOTALL):
+        m = re.search(rule["pattern"], contract_text, re.IGNORECASE | re.DOTALL)
+        if m:
             found.append({
                 "rule_id": rule["id"],
                 "severity": rule["severity"],
                 "message_uz": rule["message_uz"],
                 "advice_uz": rule["advice_uz"],
+                "sitata": _snippet(contract_text, m.start(), m.end()),   # the sentence that triggered the rule
             })
     return found
 
@@ -802,6 +804,9 @@ def analyze_contract(contract_text: str, progress=None):
             break
 
     legal = [r for r in legal if not _overlaps_rule_flag(r, clauses)]
+    # the AI sometimes reports the same thing both as "xavf" and as "shart": keep it once (as the clause)
+    legal = [r for r in legal
+             if not any(similar(r.get("buzilish", ""), c.get("muammo", "")) for c in clauses)]
 
     covered = sum(len(c) for o, c in zip(outs, chunks) if not o["skipped"])
     return {

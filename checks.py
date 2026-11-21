@@ -78,6 +78,17 @@ def _big_value(w: str):
     return _BIG.get(w.rstrip("."))
 
 
+def _ordinal_base(w: str) -> str:
+    """birinchi -> bir, ikkinchi -> ikki, elliginchi -> ellik, yuzinchi -> yuz, minginchi -> ming."""
+    for suf in ("inchi", "nchi"):
+        if w.endswith(suf) and len(w) > len(suf) + 1:
+            base = w[: -len(suf)]
+            for cand in (base, base + "i", base[:-1] + "k" if base.endswith("g") else None):
+                if cand and (cand in _UZ_NUM or cand == "yuz" or cand in _BIG):
+                    return cand
+    return w
+
+
 def words_to_int(s: str):
     """'ikki ming besh yuz' -> 2500, 'toʻrt yuz ellik million' -> 450000000.
     Reads number words from the START and stops at the first other word. None if it starts with no number word."""
@@ -86,6 +97,7 @@ def words_to_int(s: str):
     used = False
     for w in _WORD_RE.findall(s):
         w = w.strip("-")
+        w = _ordinal_base(w)        # "oltmish birinchi" (61st) = 61
         if w in _UZ_NUM:
             current += _UZ_NUM[w]
         elif w == "yuz":
