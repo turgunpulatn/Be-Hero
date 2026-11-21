@@ -1,5 +1,19 @@
-langchain>=0.3.0
-langchain-openai>=0.2.0
+# LLM / RAG (models run in a local Ollama)
+langchain-core>=0.3.0
 langchain-community>=0.3.0
+langchain-ollama>=0.2.0
+langchain-chroma>=0.1.4
 chromadb>=0.5.0
+
+# document reading
+pypdf>=4.0.0
+python-docx>=1.1.0
+pypdfium2>=4.0.0          # OCR fallback for scanned PDFs
+
+# REST API (server.py)
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9   # needed for file uploads (UploadFile)
+
 python-dotenv>=1.0.0
+json-repair>=0.25.0       # optional: last-resort repair of broken LLM JSON

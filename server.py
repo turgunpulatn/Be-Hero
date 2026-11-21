@@ -6,7 +6,9 @@
 # .env:
 #   LEGALAI_API_KEY=<python -c "import secrets; print(secrets.token_urlsafe(32))">
 #   ALLOWED_IPS=203.0.113.10        # optional, comma-separated; empty = no IP filter
-#   DEBUG_DOCS=1                    # optional, enables /docs (Swagger) for development
+#   TRUSTED_PROXIES=127.0.0.1       # optional: if requests come through nginx etc., the client IP is taken
+#                                   # from X-Forwarded-For / X-Real-IP, but ONLY when the request comes from these hosts
+#   DEBUG_DOCS=1                   # optional, enables /docs (Swagger) for development
 import hmac
 import hashlib
 import json
@@ -31,7 +33,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from analyze import chat_stream, analyze_contract, warmup, DISCLAIMER
-from app import collect_risks, build_analysis_text, get_text_from_file
+from app import build_report, build_analysis_text, get_text_from_file
 
 log = logging.getLogger("legalai.api")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -43,6 +45,7 @@ if len(API_KEY) < 32:
                        'Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"')
 
 ALLOWED_IPS = {ip.strip() for ip in os.getenv("ALLOWED_IPS", "").split(",") if ip.strip()}
+TRUSTED_PROXIES = {ip.strip() for ip in os.getenv("TRUSTED_PROXIES", "").split(",") if ip.strip()}
 ALLOWED_EXT = {".pdf", ".docx", ".jpg", ".jpeg", ".png", ".txt"}
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_TEXT_CHARS = 200_000
@@ -54,8 +57,21 @@ MAX_PENDING_JOBS = 10       # queued + running; beyond this -> 429
 _key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
+def _client_ip(request: Request) -> str | None:
+    host = request.client.host if request.client else None
+    if host and host in TRUSTED_PROXIES:
+        # the right-most X-Forwarded-For entry is the one OUR proxy added (the left part can be forged by the client)
+        xff = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+        if xff:
+            return xff[-1]
+        real = request.headers.get("x-real-ip", "").strip()
+        if real:
+            return real
+    return host
+
+
 def require_key(request: Request, key: str | None = Security(_key_header)):
-    if ALLOWED_IPS and (request.client is None or request.client.host not in ALLOWED_IPS):
+    if ALLOWED_IPS and _client_ip(request) not in ALLOWED_IPS:
         raise HTTPException(403, "Forbidden")
     # constant-time comparison (no timing leaks)
     if not key or not hmac.compare_digest(key.encode(), API_KEY.encode()):
@@ -106,18 +122,24 @@ def _cleanup_jobs():
             del _jobs[jid]
 
 
-def _pending_count() -> int:
+def _pending_count_unlocked() -> int:
+    return sum(1 for v in _jobs.values() if v["status"] in ("queued", "running"))
+
+
+def _update(job: dict, **fields):
     with _lock:
-        return sum(1 for v in _jobs.values() if v["status"] in ("queued", "running"))
+        job.update(fields)
 
 
 def _run_job(job_id: str, text: str | None, filepath: str | None):
-    job = _jobs[job_id]
-    job["status"] = "running"
+    with _lock:
+        job = _jobs[job_id]
+        job["status"] = "running"
     t0 = time.time()
 
     def progress(msg):
-        job["progress"].append({"t": round(time.time() - t0, 1), "msg": msg})
+        with _lock:
+            job["progress"].append({"t": round(time.time() - t0, 1), "msg": msg})
 
     try:
         if filepath:
@@ -131,31 +153,33 @@ def _run_job(job_id: str, text: str | None, filepath: str | None):
             progress("Natija keshdan olindi.")
         else:
             result = analyze_contract(text, progress=progress)
+            report = build_report(result)
             payload = {
                 "result": {
-                    "risks": collect_risks(result),       # flat, sorted list, same order as the terminal report
-                    "actions": result.get("nima_qilish", []),
+                    "verdict": report["verdict"],            # {level: high|medium|low|clean|unknown, label, summary}
+                    "risks": report["risks"],                # flat, sorted high -> low, same numbering as the terminal
+                    "actions": report["actions"],            # ordered action plan
+                    "suggested_questions": report["questions"],
+                    "coverage": report["coverage"],          # how much of the document was scanned
                     "warnings": result.get("ogohlantirish", []),
                     "disclaimer": result.get("disclaimer", DISCLAIMER),
-                    "raw": result,                        # full original structure
+                    "raw": {k: v for k, v in result.items() if k != "tahlil_matni"},
                 },
                 "analysis_text": build_analysis_text(result),
+                "document_text": result.get("tahlil_matni", text),   # cleaned (Latin) text
             }
             # do not cache incomplete analyses (some chunk failed) - let the user retry them
             if not any("tahlil qilinmadi" in w for w in payload["result"]["warnings"]):
                 _cache_put(key, payload)
-        job["result"] = payload["result"]
-        job["document_text"] = text
-        job["analysis_text"] = payload["analysis_text"]
-        job["status"] = "done"
+        _update(job, result=payload["result"], document_text=payload["document_text"],
+                analysis_text=payload["analysis_text"], status="done")
     except EmptyTextError:
-        job["status"], job["error"] = "error", {"code": "empty_text", "message": "No text could be extracted from the file."}
+        _update(job, status="error", error={"code": "empty_text", "message": "No text could be extracted from the file."})
     except Exception:
         log.exception("Job %s failed", job_id)   # details only in the server log, not to the client
-        job["status"], job["error"] = "error", {"code": "internal_error", "message": "Analysis failed."}
+        _update(job, status="error", error={"code": "internal_error", "message": "Analysis failed."})
     finally:
-        job["elapsed"] = round(time.time() - t0, 1)
-        job["finished"] = time.time()
+        _update(job, elapsed=round(time.time() - t0, 1), finished=time.time())
         if filepath:
             try:
                 os.remove(filepath)
@@ -165,16 +189,19 @@ def _run_job(job_id: str, text: str | None, filepath: str | None):
 
 def _submit(text: str | None = None, filepath: str | None = None) -> str:
     _cleanup_jobs()
-    if _pending_count() >= MAX_PENDING_JOBS:
+    job_id = uuid.uuid4().hex
+    with _lock:   # check + insert atomically, so two parallel requests cannot both pass the limit
+        full = _pending_count_unlocked() >= MAX_PENDING_JOBS
+        if not full:
+            _jobs[job_id] = {
+                "status": "queued", "progress": [], "result": None, "error": None,
+                "document_text": None, "analysis_text": None,
+                "created": time.time(), "finished": None, "elapsed": None,
+            }
+    if full:
         if filepath:
             os.remove(filepath)
         raise HTTPException(429, "Queue is full, try again later", headers={"Retry-After": "60"})
-    job_id = uuid.uuid4().hex
-    _jobs[job_id] = {
-        "status": "queued", "progress": [], "result": None, "error": None,
-        "document_text": None, "analysis_text": None,
-        "created": time.time(), "finished": None, "elapsed": None,
-    }
     _executor.submit(_run_job, job_id, text, filepath)
     return job_id
 
@@ -201,16 +228,29 @@ class ChatRequest(BaseModel):
     job_id: str | None = None     # ...or reference a finished analysis job (kept for 1 hour)
 
 
+def _job_snapshot(job_id: str) -> dict | None:
+    """A consistent copy of a job (the worker thread may be changing it right now)."""
+    with _lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return None
+        snap = dict(job)
+        snap["progress"] = list(job["progress"])
+        return snap
+
+
 def _resolve_doc(req: ChatRequest) -> dict | None:
     if req.doc:
         return {"text": req.doc.text, "analysis": req.doc.analysis}
     if req.job_id:
-        job = _jobs.get(req.job_id)
+        job = _job_snapshot(req.job_id)
         if not job:
             raise HTTPException(404, "job_id not found or expired; pass 'doc' explicitly")
         if job["status"] != "done":
             raise HTTPException(409, "Analysis is not finished yet")
-        return {"text": job["document_text"], "analysis": job["analysis_text"]}
+        res = job["result"]
+        return {"text": job["document_text"], "analysis": job["analysis_text"],
+                "risks": res.get("risks", []), "verdict": res.get("verdict")}
     return None
 
 
@@ -275,7 +315,7 @@ def analyze_file(file: UploadFile = File(...)):
 @v1.get("/jobs/{job_id}")
 def get_job(job_id: str):
     """Poll this every 2-3 s. status: queued | running | done | error."""
-    job = _jobs.get(job_id)
+    job = _job_snapshot(job_id)
     if not job:
         raise HTTPException(404, "Job not found or expired")
     out = {

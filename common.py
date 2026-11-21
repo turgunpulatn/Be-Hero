@@ -19,9 +19,11 @@ COLLECTION_NAME = "laws_uz_realestate"
 
 
 def normalize_uzbek(text: str) -> str:
-    """Unify o' / g' apostrophes into the standard 'ʻ' (U+02BB), PRESERVING letter case."""
+    """Unify o' / g' apostrophes into 'ʻ' (U+02BB) and the tutuq into 'ʼ' (U+02BC), PRESERVING letter case."""
     text = re.sub(r"([Oo])[\u2018\u2019\u02BB\u02BC\u0060']", lambda m: m.group(1) + "\u02BB", text)
     text = re.sub(r"([Gg])[\u2018\u2019\u02BB\u02BC\u0060']", lambda m: m.group(1) + "\u02BB", text)
+    # tutuq belgisi between two letters: ma'lumot / ma`lumot / ma’lumot -> maʼlumot
+    text = re.sub(r"(?<=[^\W\d_])[\u2018\u2019\u0060'](?=[^\W\d_])", "\u02BC", text)
     return text
 
 
@@ -47,6 +49,9 @@ def make_embeddings():
 
 
 # ---------------------------------------------------------------- splitting
+_CLAUSE_START = re.compile(r"\n(?=\s*\d{1,2}(?:\.\d{1,2})*[.)]\s+\S)")
+
+
 def split_contract(text: str, max_chars: int) -> list[str]:
     """Cut a contract into pieces of <= max_chars, preferring paragraph / sentence ends
     instead of cutting in the middle of a clause (a cut clause = a risk the AI cannot quote)."""
@@ -58,7 +63,10 @@ def split_contract(text: str, max_chars: int) -> list[str]:
         if end < n:
             window = text[start:end]
             cut = -1
-            for m in markers:
+            for mm in _CLAUSE_START.finditer(window):   # best cut: right before a numbered clause "\n3. ..."
+                if mm.start() >= floor:
+                    cut = mm.start()
+            for m in (markers if cut == -1 else ()):
                 idx = window.rfind(m)
                 if idx >= floor:
                     cut = idx + (1 if m.startswith(".") else 0)
@@ -71,8 +79,8 @@ def split_contract(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-# "12-modda." (Uzbek) or "Статья 12." (Russian) at a word boundary
-ARTICLE_RE = re.compile(r"(?:(?<=\s)|^)(\d{1,3}(?:-\d{1,2})?-modda\.|Статья\s+\d{1,3}(?:\.\d+)?\.)")
+# "12-modda." at a word boundary (all laws are in Uzbek)
+ARTICLE_RE = re.compile(r"(?:(?<=\s)|^)(\d{1,3}(?:-\d{1,2})?-modda\.)")
 
 
 def split_law_articles(text: str, max_chars: int = 1200) -> list[str]:

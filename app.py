@@ -8,6 +8,7 @@ import time
 logging.getLogger("chromadb").setLevel(logging.ERROR)
 logging.getLogger("langchain").setLevel(logging.ERROR)
 
+from checks import build_summary, plain_actions, suggested_questions
 from analyze import (
     analyze_contract, extract_text_from_image, extract_text_from_pdf,
     chat_stream, warmup, DISCLAIMER, extract_text_from_docx,
@@ -24,7 +25,7 @@ class Colors:
     BOLD = '\033[1m'
 
 
-BACK_WORDS = {"back", "b", "orqaga", "назад", "exit", "quit", "chiqish"}
+BACK_WORDS = {"back", "b", "orqaga", "exit", "quit", "chiqish"}
 
 
 def get_text_from_file(filepath):
@@ -35,10 +36,23 @@ def get_text_from_file(filepath):
     elif filepath.lower().endswith('.docx'):
         return extract_text_from_docx(filepath)
     elif filepath.lower().endswith(('.doc', '.docm', '.dotm')):
-        raise ValueError("Eski .doc / makroli format qo'llab-quvvatlanmaydi. Wordda 'Save as .docx' yoki PDF qiling.")
+        raise ValueError("Eski .doc / makroli format qoʻllab-quvvatlanmaydi. Wordda .docx yoki PDF qilib saqlang.")
     else:
-        with open(filepath, encoding="utf-8") as f:
-            return f.read()
+        return read_text_file(filepath)
+
+
+def read_text_file(filepath):
+    """Plain text in UTF-8 (with or without BOM), UTF-16, or Windows-1251 (common for Russian/Uzbek Cyrillic files)."""
+    with open(filepath, "rb") as f:
+        raw = f.read()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    for enc in ("utf-8-sig", "cp1251"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def severity_level(sev: str) -> int:
@@ -95,8 +109,37 @@ def collect_risks(result):
     return all_risks
 
 
+def build_report(result) -> dict:
+    """Everything a UI needs besides the raw result: sorted risks, verdict, action plan, suggested questions."""
+    risks = collect_risks(result)
+    cov = result.get("qamrov") or {}
+    incomplete = bool(result.get("ogohlantirish")) and not cov.get("toliq", True)
+    return {
+        "risks": risks,
+        "verdict": build_summary(risks, incomplete=incomplete),
+        "actions": plain_actions(risks, result.get("nima_qilish", [])),
+        "questions": suggested_questions(risks),
+        "coverage": cov,
+    }
+
+
+_VERDICT_COLOR = {"high": Colors.FAIL, "medium": Colors.WARNING, "low": Colors.GREEN, "clean": Colors.GREEN,
+                  "unknown": Colors.WARNING}
+
+
 def print_risk_report(result):
-    all_risks = collect_risks(result)
+    report = build_report(result)
+    all_risks = report["risks"]
+
+    v = report["verdict"]
+    color = _VERDICT_COLOR.get(v["level"], Colors.BLUE)
+    print(f"\n{color}{Colors.BOLD}{'=' * 60}\n  {v['label']}\n{'=' * 60}{Colors.ENDC}")
+    if v["summary"]:
+        print(f"  {v['summary']}")
+    cov = report["coverage"]
+    if cov:
+        print(f"  {Colors.BLUE}Qamrov: {cov.get('tahlil_qilingan_belgi', 0)} / {cov.get('jami_belgi', 0)} belgi, "
+              f"{cov.get('qismlar', 0)} qism{' (toʻliq)' if cov.get('toliq') else ' (TOʻLIQ EMAS)'}{Colors.ENDC}")
 
     for w in result.get("ogohlantirish", []):
         print(f"\n{Colors.WARNING}⚠️ {w}{Colors.ENDC}")
@@ -142,11 +185,15 @@ def print_risk_report(result):
             print(f"      {risk['label']}: {risk['consequence']}")
             print("-" * 60)
 
-    actions = result.get("nima_qilish", [])
+    actions = report["actions"]
     if actions:
-        print(f"\n{Colors.BOLD}📝 NIMA QILISH KERAK:{Colors.ENDC}")
-        for a in actions:
-            print(f"   • {a}")
+        print(f"\n{Colors.BOLD}📝 NIMA QILISH KERAK (muhimlik tartibida):{Colors.ENDC}")
+        for n, a in enumerate(actions, 1):
+            print(f"   {n}. {a}")
+
+    print(f"\n{Colors.BOLD}❓ Savol berishingiz mumkin:{Colors.ENDC}")
+    for q in report["questions"]:
+        print(f"   • {q}")
 
     print(f"\n{Colors.BLUE}ℹ️ {result.get('disclaimer', DISCLAIMER)}{Colors.ENDC}")
 
@@ -169,7 +216,7 @@ def build_analysis_text(result) -> str:
             line += f" | qonun manbasi: {r['source']}"
         line += f" | {r['label'].lower()}: {r['consequence'][:150]}"
         lines.append(line)
-    actions = result.get("nima_qilish", [])
+    actions = plain_actions(collect_risks(result), result.get("nima_qilish", []))
     if actions:
         lines.append("Tavsiya etilgan qadamlar: " + "; ".join(actions))
     return "\n".join(lines) if lines else "Xavf topilmadi."
@@ -192,7 +239,7 @@ def chat_loop(doc=None):
         if not user_q:
             continue
 
-        print(f"{Colors.BLUE}⏳ AI o'ylamoqda...{Colors.ENDC}", end="\r", flush=True)
+        print(f"{Colors.BLUE}⏳ AI oʻylamoqda...{Colors.ENDC}", end="\r", flush=True)
         parts = []
         for piece in chat_stream(user_q, history, doc):
             if not parts:  # first token: replace the "thinking" line
@@ -214,15 +261,15 @@ def main():
     threading.Thread(target=warmup, daemon=True).start()
 
     while True:
-        print(f"\n{Colors.BOLD}Menyu (Меню):{Colors.ENDC}")
-        print("1. 📷 Rasm / hujjat yuborish va tahlil + savol-javob (Фото/документ + вопросы по нему)")
-        print("2. 💬 Oddiy suhbat (Обычный чат с ИИ)")
-        print("0. ❌ Chiqish (Выход)")
+        print(f"\n{Colors.BOLD}Menyu:{Colors.ENDC}")
+        print("1. 📷 Rasm / hujjat yuborish: tahlil + savol-javob")
+        print("2. 💬 Oddiy suhbat (yuridik savollar)")
+        print("0. ❌ Chiqish")
 
-        choice = input("\n>>> Tanlang (Выберите): ").strip().lower()
+        choice = input("\n>>> Tanlang: ").strip().lower()
 
         if choice in ("0", "exit", "chiqish"):
-            print("Xayr! (До свидания!)")
+            print("Xayr!")
             break
 
         elif choice == "1":
@@ -251,21 +298,24 @@ def main():
                 print_risk_report(result)
 
                 # Go straight into a chat that knows this document and its analysis
-                doc = {"text": text, "analysis": build_analysis_text(result)}
+                report = build_report(result)
+                doc = {"text": result.get("tahlil_matni", text), "analysis": build_analysis_text(result),
+                       "risks": report["risks"], "verdict": report["verdict"]}
                 chat_loop(doc)
                 break
 
         elif choice == "2":
             chat_loop()
         else:
-            print("Noto'g'ri tanlov. Qaytadan urinib ko'ring.")
+            print("Notoʻgʻri tanlov. Qaytadan urinib koʻring.")
 
 
 def cli_json(filepath):
     """python app.py --json contract.pdf  -> prints the full result as JSON (for a web UI)."""
     text = get_text_from_file(filepath)
     result = analyze_contract(text)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    raw = {k: v for k, v in result.items() if k != "tahlil_matni"}
+    print(json.dumps({"result": raw, "report": build_report(result)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
