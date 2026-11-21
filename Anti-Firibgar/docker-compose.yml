@@ -1,0 +1,44 @@
+name: anti-firibgar
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: anti
+      POSTGRES_PASSWORD: anti
+      POSTGRES_DB: antifiribgar
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432" # for DB tools on the host (DBeaver, psql); 5433 avoids a local Postgres on 5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anti -d antifiribgar"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://anti:anti@db:5432/antifiribgar
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    # The AI model runs on another machine; reach it via AI_BASE_URL in .env.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  web:
+    build: ./web
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  uploads:
