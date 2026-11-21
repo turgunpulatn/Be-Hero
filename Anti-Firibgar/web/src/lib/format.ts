@@ -15,7 +15,7 @@ export function formatDay(iso: string): string {
 
 export const formatSum = (n: number) => `${String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ")} so‘m`;
 
-export const SOURCE_LABEL: Record<Source, string> = { pdf: "PDF", image: "Skan", sample: "Namuna" };
+export const SOURCE_LABEL: Record<Source, string> = { pdf: "PDF", docx: "Word", image: "Skan", sample: "Namuna" };
 
 export const RISK_LABEL: Record<Risk, string> = {
   high: "Yuqori xavf",

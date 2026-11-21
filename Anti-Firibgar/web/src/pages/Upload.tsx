@@ -4,7 +4,9 @@ import { useNavigate } from "react-router-dom";
 import { useUpload } from "../api/hooks";
 import { BackLink, Button, cx, ErrorText, Footnote, PageTitle, Spinner } from "../components/ui";
 
-const ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp";
+const ACCEPT =
+  ".pdf,.docx,.jpg,.jpeg,.png,.webp,application/pdf," +
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp";
 
 export default function Upload() {
   const navigate = useNavigate();
@@ -69,7 +71,7 @@ export default function Upload() {
         <Button variant="secondary" full className="mt-5" onClick={() => fileRef.current?.click()}>
           Fayl yoki surat yuklash
         </Button>
-        <Footnote>PDF · JPG · PNG</Footnote>
+        <Footnote>PDF · Word (DOCX) · JPG · PNG</Footnote>
       </div>
 
       {/* Desktop: drag & drop */}
@@ -90,7 +92,7 @@ export default function Upload() {
         <Button className="mt-6" onClick={() => fileRef.current?.click()}>
           Fayl yoki surat yuklash
         </Button>
-        <p className="mt-4 text-xs text-muted">PDF · JPG · PNG · 15 MB gacha</p>
+        <p className="mt-4 text-xs text-muted">PDF · Word (DOCX) · JPG · PNG · 15 MB gacha</p>
       </div>
       <div className="hidden md:block">
         <ErrorText error={upload.error} />

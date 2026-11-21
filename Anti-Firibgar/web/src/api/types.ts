@@ -1,6 +1,6 @@
 export type Risk = "high" | "medium" | "low";
 export type ReviewStatus = "pending" | "analyzing" | "done" | "failed";
-export type Source = "pdf" | "image" | "sample";
+export type Source = "pdf" | "docx" | "image" | "sample";
 
 export interface User {
   id: number;

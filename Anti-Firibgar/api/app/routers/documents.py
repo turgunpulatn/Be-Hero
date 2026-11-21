@@ -16,12 +16,14 @@ from ..schemas import (
 )
 from ..services.analysis import answer, run_review
 from ..services.clauses import split_clauses
-from ..services.extraction import IMAGE_MIMES, PDF_MIME, extract
+from ..services.extraction import DOCX_MIME, IMAGE_MIMES, PDF_MIME, extract
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["documents"])
 
-EXT_MIME = {".pdf": PDF_MIME, ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+EXT_MIME = {".pdf": PDF_MIME, ".docx": DOCX_MIME, ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".webp": "image/webp"}
+SOURCE = {PDF_MIME: "pdf", DOCX_MIME: "docx"}   # everything else = "image"
 
 
 def _brief(doc: Document) -> ReviewBrief | None:
@@ -75,8 +77,10 @@ def upload_document(
     filename = Path(file.filename or "hujjat").name
     ext = Path(filename).suffix.lower()
     mime = EXT_MIME.get(ext)
+    if ext in (".doc", ".docm", ".dot", ".dotm", ".rtf"):
+        raise HTTPException(415, "Eski Word formati (.doc) qo‘llab-quvvatlanmaydi. Wordda «Saqlash» → .docx qilib saqlang")
     if not mime:
-        raise HTTPException(415, "Faqat PDF, JPG yoki PNG fayl yuklash mumkin")
+        raise HTTPException(415, "Faqat PDF, Word (.docx), JPG yoki PNG fayl yuklash mumkin")
 
     data = file.file.read()
     if len(data) > settings.max_upload_mb * 1024 * 1024:
@@ -106,7 +110,7 @@ def upload_document(
         filename=filename,
         file_path=str(stored),
         mime=mime,
-        source="pdf" if mime == PDF_MIME else "image",
+        source=SOURCE.get(mime, "image"),
         page_count=pages,
         extracted_text=text,
         clauses=[Clause(idx=c.idx, title=c.title, text=c.text) for c in clauses],

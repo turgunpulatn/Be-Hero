@@ -44,7 +44,7 @@ class Document(Base):
     filename: Mapped[str] = mapped_column(String(300), default="")
     file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     mime: Mapped[str] = mapped_column(String(100), default="")
-    source: Mapped[str] = mapped_column(String(20))  # pdf | image | sample
+    source: Mapped[str] = mapped_column(String(20))  # pdf | docx | image | sample
     page_count: Mapped[int] = mapped_column(Integer, default=1)
     extracted_text: Mapped[str] = mapped_column(Text, default="")
     is_sample: Mapped[bool] = mapped_column(Boolean, default=False)
